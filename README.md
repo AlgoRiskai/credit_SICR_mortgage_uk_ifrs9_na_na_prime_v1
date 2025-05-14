@@ -1,0 +1,1 @@
+# credit_SICR_mortgage_uk_ifrs9_na_na_prime_v1
