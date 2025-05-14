@@ -1,0 +1,169 @@
+import numpy as np
+import pandas as pd
+import math
+
+# ------------------------------------------------------------------------------
+# Helper: Compute Confusion Metrics and MCC
+# ------------------------------------------------------------------------------
+def compute_confusion_metrics(y_true, y_pred):
+    """
+    Computes the true positives, true negatives, false positives,
+    false negatives, and Matthews Correlation Coefficient (MCC).
+    """
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    
+    TP = np.sum((y_true == 1) & (y_pred == 1))
+    TN = np.sum((y_true == 0) & (y_pred == 0))
+    FP = np.sum((y_true == 0) & (y_pred == 1))
+    FN = np.sum((y_true == 1) & (y_pred == 0))
+    
+    # Compute MCC using the formula.
+    denominator = math.sqrt((TP+FP) * (TP+FN) * (TN+FP) * (TN+FN))
+    if denominator == 0:
+        mcc = 0
+    else:
+        mcc = (TP * TN - FP * FN) / denominator
+        
+    return TP, TN, FP, FN, mcc
+
+# ------------------------------------------------------------------------------
+# Data Generation: Simulated Mortgages Portfolio Data
+# ------------------------------------------------------------------------------
+def generate_mortgage_data(n_samples=1000, random_state=42):
+    """
+    Simulate a mortgages portfolio with quantitative PD measures.
+    
+    For each account we simulate:
+      - origination_PD: The initial probability of default.
+      - current_PD: The PD as of the reporting date (may be higher or lower than
+        the origination_PD after a period of credit performance evolution).
+        
+    A ground truth SICR flag is then generated. Here we assume that an account
+    should be classified as having a significant increase in credit risk (i.e. Stage 2)
+    if the increase (current_PD - origination_PD + noise) exceeds 0.04.
+    
+    In a real-world IFRS 9 model the ground truth might come from observed defaults,
+    losses, or expert review of the credit deterioration process.
+    """
+    np.random.seed(random_state)
+    df = pd.DataFrame()
+    df['account_id'] = np.arange(1, n_samples+1)
+    
+    # Simulate origination PD between 2% and 10%
+    df['origination_PD'] = np.random.uniform(0.02, 0.1, n_samples)
+    
+    # Current PD realized at reporting date: add a drift (e.g. +0.03) and some noise:
+    df['current_PD'] = df['origination_PD'] + np.random.normal(0.03, 0.01, n_samples)
+    # Ensure PD values remain within [0, 1]
+    df['current_PD'] = df['current_PD'].clip(0, 1)
+    
+    # Generate a ground truth SICR flag. Here, if the PD increase (with an added small noise)
+    # is greater than 4 percentage points then the account is flagged as SICR (Stage 2).
+    noise = np.random.normal(0, 0.005, n_samples)
+    df['true_SICR'] = ((df['current_PD'] - df['origination_PD'] + noise) > 0.04).astype(int)
+    
+    return df
+
+# ------------------------------------------------------------------------------
+# Component 1: Evaluate the Absolute PD Increase Test
+# ------------------------------------------------------------------------------
+def evaluate_absolute_diff_test(df, thresholds):
+    """
+    For each candidate absolute difference threshold, this component computes
+    the predicted SICR flag if (current_PD - origination_PD) exceeds the threshold.
+    It returns a summary DataFrame with the test type, candidate threshold, the
+    confusion matrix counts, and the MCC.
+    """
+    results = []
+    abs_diff = df['current_PD'] - df['origination_PD']
+    y_true = df['true_SICR']
+    for thresh in thresholds:
+        y_pred = (abs_diff >= thresh).astype(int)
+        TP, TN, FP, FN, mcc = compute_confusion_metrics(y_true, y_pred)
+        results.append({
+            'Test': 'AbsoluteDiff',
+            'Threshold': thresh,
+            'TP': TP,
+            'TN': TN,
+            'FP': FP,
+            'FN': FN,
+            'MCC': mcc
+        })
+    return pd.DataFrame(results)
+
+# ------------------------------------------------------------------------------
+# Component 2: Evaluate the PD Ratio Test
+# ------------------------------------------------------------------------------
+def evaluate_ratio_test(df, thresholds):
+    """
+    For each candidate ratio threshold, this component computes the predicted SICR flag
+    based on whether the ratio (current_PD / origination_PD) meets or exceeds the candidate.
+    It returns a summary DataFrame with the corresponding confusion matrix counts and MCC.
+    """
+    results = []
+    ratio = df['current_PD'] / df['origination_PD']
+    y_true = df['true_SICR']
+    for thresh in thresholds:
+        y_pred = (ratio >= thresh).astype(int)
+        TP, TN, FP, FN, mcc = compute_confusion_metrics(y_true, y_pred)
+        results.append({
+            'Test': 'Ratio',
+            'Threshold': thresh,
+            'TP': TP,
+            'TN': TN,
+            'FP': FP,
+            'FN': FN,
+            'MCC': mcc
+        })
+    return pd.DataFrame(results)
+
+# ------------------------------------------------------------------------------
+# Main Integration: IFRS 9 SICR Determination Model
+# ------------------------------------------------------------------------------
+def main():
+    # (1) Generate simulated data reflecting a 5‐year historical period.
+    df = generate_mortgage_data(n_samples=1000)
+    print("Sample of the Mortgage Portfolio Data:")
+    print(df.head())
+    
+    # (2) Define candidate threshold ranges.
+    # For the absolute difference: test thresholds from 0.005 to 0.100 (0.5% to 10% increment)
+    abs_thresholds = np.arange(0.005, 0.101, 0.005)
+    # For the ratio: test thresholds from 1.0 to 3.0 (e.g. current PD is 100% to 200%+ higher than origination)
+    ratio_thresholds = np.arange(1.0, 3.01, 0.1)
+    
+    # (3) Evaluate the Absolute Difference criteria.
+    abs_results = evaluate_absolute_diff_test(df, abs_thresholds)
+    
+    # (4) Evaluate the PD Ratio criteria.
+    ratio_results = evaluate_ratio_test(df, ratio_thresholds)
+    
+    # (5) Concatenate results for overall comparison.
+    all_results = pd.concat([abs_results, ratio_results], ignore_index=True)
+    
+    # (6) Identify the best candidate threshold per test type based on MCC.
+    best_abs = abs_results.loc[abs_results['MCC'].idxmax()]
+    best_ratio = ratio_results.loc[ratio_results['MCC'].idxmax()]
+    
+    # (7) Report summary outputs.
+    print("\n--- Absolute Difference Test Results (first 10 rows) ---")
+    print(abs_results.head(10))
+    print("\nBest Absolute Difference Test Threshold (by MCC):")
+    print(best_abs)
+    
+    print("\n--- PD Ratio Test Results (first 10 rows) ---")
+    print(ratio_results.head(10))
+    print("\nBest PD Ratio Test Threshold (by MCC):")
+    print(best_ratio)
+    
+    print("\n--- Top 10 Combined Results (sorted by MCC) ---")
+    print(all_results.sort_values(by='MCC', ascending=False).head(10))
+    
+    # (8) The model developer can now decide which test (or a combination of tests)
+    # offers the best discrimination for identifying Stage 2 accounts.
+    # In practice, the optimal threshold(s) and potential combinations would be integrated
+    # into the IFRS 9 SICR determination framework and validated with additional data.
+    
+if __name__ == '__main__':
+    main()
