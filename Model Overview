@@ -1,0 +1,13 @@
+Data Generation: The function generate_mortgage_data() simulates a mortgages portfolio over a five‐year period. Each account is given an origination PD (between 2% and 10%) and a current PD (simulated as the origination PD plus an average drift and random noise). A ground truth SICR flag is generated based on whether the increase (with added random noise) is above 4 percentage points. In a full IFRS 9 application, this ground truth would be derived from a combination of observed performance and expert judgment.
+
+Test Components: Two candidate criteria are evaluated for SICR determination:
+
+Absolute Difference Test: Checks if the (current_PD – origination_PD) exceeds a candidate threshold.
+
+PD Ratio Test: Checks if the ratio (current_PD / origination_PD) exceeds a candidate threshold. For each candidate threshold, the functions evaluate_absolute_diff_test() and evaluate_ratio_test() compute the predicted SICR classification, then calculate the confusion matrix counts and MCC using the helper function compute_confusion_metrics().
+
+Metric Calculation and Threshold Selection: A grid search is performed over candidate thresholds for both test types. The results for each candidate (TP, TN, FP, FN, and MCC) are stored in DataFrames. The candidate threshold with the maximum MCC is then selected as the “best” criterion. MCC is particularly useful because it considers both positive and negative classifications even when class sizes are imbalanced.
+
+Integration into an IFRS 9 Model: The main() function integrates all components. It simulates the data, applies both testing approaches, and prints summary tables so that you can compare the performance of both methods. Based on these results, you may decide to use one test or a combination of tests for determining the quantitative PD measure to classify accounts as Stage 2 within your IFRS 9 SICR determination framework.
+
+This sample model can be further enhanced by adding additional tests (for example incorporating delinquency measures, LTV changes, etc.), adopting cross‐validation on historical data, or combining several criteria using ensemble or scorecard techniques
